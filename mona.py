@@ -34,11 +34,11 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)
  
-$Revision: 144 $
-$Id: mona.py 144 2011-11-18 14:13:04Z corelanc0d3r $ 
+$Revision: 156 $
+$Id: mona.py 156 2012-02-23 17:32:05Z corelanc0d3r $ 
 """
 
-__VERSION__ = '1.2-dev'
+__VERSION__ = '1.3-dev'
 __IMM__ = '1.8'
 
 import debugger
@@ -350,7 +350,14 @@ def toJavaScript(input):
 		if not(thisline.startswith("#")):
 			if thisline.startswith("0x"):
 				theptr = thisline.split(",")[0].replace("0x","")
+				# reverse the bytes
 				cnt = 0
+				newptr = ""
+				while cnt <= len(theptr)-2:
+					newptr = theptr[cnt]+theptr[cnt+1] + newptr
+					cnt += 2
+				cnt = 0
+				theptr = newptr
 				these4bytes = ""
 				while cnt <= len(theptr)-2:
 					thisbytestring =  hex2bin("\\x" + theptr[cnt]+theptr[cnt+1])
@@ -1160,7 +1167,7 @@ class MnModule:
 					safeseh_flag = [0x4, 0x4, 0x400]
 					os_index = 0
 					# Vista / Win7
-					if osver == "6" or osver == "7":
+					if osver == "6" or osver == "7" or osver == "vista" or osver == "win7" or osver == "2008server":
 						os_index = 2
 					flags=struct.unpack('<H',imm.readMemory(pebase+safeseh_offset[os_index],2))[0]
 					numberofentries=struct.unpack('<L',imm.readMemory(pebase+0x74,4))[0]
@@ -1385,53 +1392,56 @@ class MnPointer:
 		# Unicode
 		self.isUnicode = ((byte1 == 0) and (byte3 == 0))
 		
+		# Unicode reversed
+		self.isUnicodeRev = ((byte2 == 0) and (byte4 == 0))		
+		
 		# Unicode transform
 		self.unicodeTransform = UnicodeTransformInfo(self.HexAddress) 
 		
 		# Ascii
-		if not self.isUnicode:			
+		if not self.isUnicode and not self.isUnicodeRev:			
 			self.isAscii = bytesInRange(address, AsciiRange)
 		else:
 			self.isAscii = bytesInRange(address, NullRange + AsciiRange)
 		
 		# AsciiPrintable
-		if not self.isUnicode:
+		if not self.isUnicode and not self.isUnicodeRev:
 			self.isAsciiPrintable = bytesInRange(address, AsciiPrintRange)
 		else:
 			self.isAsciiPrintable = bytesInRange(address, NullRange + AsciiPrintRange)
 			
 		# Uppercase
-		if not self.isUnicode:
+		if not self.isUnicode and not self.isUnicodeRev:
 			self.isUppercase = bytesInRange(address, AsciiUppercaseRange)
 		else:
 			self.isUppercase = bytesInRange(address, NullRange + AsciiUppercaseRange)
 		
 		# Lowercase
-		if not self.isUnicode:
+		if not self.isUnicode and not self.isUnicodeRev:
 			self.isLowercase = bytesInRange(address, AsciiLowercaseRange)
 		else:
 			self.isLowercase = bytesInRange(address, NullRange + AsciiLowercaseRange)
 			
 		# Numeric
-		if not self.isUnicode:
+		if not self.isUnicode and not self.isUnicodeRev:
 			self.isNumeric = bytesInRange(address, AsciiNumericRange)
 		else:
 			self.isNumeric = bytesInRange(address, NullRange + AsciiNumericRange)
 			
 		# Alpha numeric
-		if not self.isUnicode:
+		if not self.isUnicode and not self.isUnicodeRev:
 			self.isAlphaNumeric = bytesInRange(address, AsciiAlphaRange + AsciiNumericRange + AsciiSpaceRange)
 		else:
 			self.isAlphaNumeric = bytesInRange(address, NullRange + AsciiAlphaRange + AsciiNumericRange + AsciiSpaceRange)
 		
 		# Uppercase + Numbers
-		if not self.isUnicode:
+		if not self.isUnicode and not self.isUnicodeRev:
 			self.isUpperNum = bytesInRange(address, AsciiUppercaseRange + AsciiNumericRange)
 		else:
 			self.isUpperNum = bytesInRange(address, NullRange + AsciiUppercaseRange + AsciiNumericRange)
 		
 		# Lowercase + Numbers
-		if not self.isUnicode:
+		if not self.isUnicode and not self.isUnicodeRev:
 			self.isLowerNum = bytesInRange(address, AsciiLowercaseRange + AsciiNumericRange)
 		else:
 			self.isLowerNum = bytesInRange(address, NullRange + AsciiLowercaseRange + AsciiNumericRange)
@@ -1460,6 +1470,8 @@ class MnPointer:
 
 		if self.isUnicode:
 			outstring += "unicode,"
+		if self.isUnicodeRev:
+			outstring += "unicodereverse,"			
 		if self.isAsciiPrintable:
 			outstring += "asciiprint,"
 		if self.isAscii:
@@ -1491,6 +1503,9 @@ class MnPointer:
 	
 	def isUnicode(self):
 		return self.isUnicode
+		
+	def isUnicodeRev(self):
+		return self.isUnicodeRev		
 	
 	def isUnicodeTransform(self):
 		return self.unicodeTransform != ""
@@ -1626,6 +1641,9 @@ def meetsCriteria(pointer,criteria):
 	# Unicode
 	if "unicode" in criteria and not (pointer.isUnicode or pointer.unicodeTransform != ""):
 		return False
+		
+	if "unicoderev" in criteria and not pointer.isUnicodeRev:
+		return False		
 		
 	# Ascii
 	if "ascii" in criteria and not pointer.isAscii:
@@ -2571,9 +2589,9 @@ def findROPFUNC(modulecriteria={},criteria={}):
 		imm.log("[+] Looking for pointers to interesting functions...")
 	curmod = ""
 	results = 0
-	ropfuncfilename="ropfunc.txt"
-	objropfuncfile = MnLog(ropfuncfilename)
-	ropfuncfile = objropfuncfile.reset()
+	#ropfuncfilename="ropfunc.txt"
+	#objropfuncfile = MnLog(ropfuncfilename)
+	#ropfuncfile = objropfuncfile.reset()
 	
 	offsets = {}
 	
@@ -3374,7 +3392,7 @@ def findJOPGADGETS(modulecriteria={},criteria={},depth=7):
 
 	#----- File compare ----- #
 
-def findFILECOMPARISON(modulecriteria={},criteria={},allfiles=[],tomatch="",checkstrict=True):
+def findFILECOMPARISON(modulecriteria={},criteria={},allfiles=[],tomatch="",checkstrict=True,rangeval=0):
 	"""
 	Compares two or more files generated with mona.py and lists the entries that have been found in all files
 
@@ -3446,51 +3464,97 @@ def findFILECOMPARISON(modulecriteria={},criteria={},allfiles=[],tomatch="",chec
 		imm.log("Starting compare operation, please wait...")
 		imm.updateLog()
 		stopnow = False	
-		for thisLine in refcontent:
-			outtofile = "\n0. "+thisLine.replace("\n","").replace("\r","")
-			if ((tomatch != "" and thisLine.upper().find(tomatch.upper()) > -1) or tomatch == "") and not stopnow:
-				refpointer=""
-				pointerfound=1  #pointer is in source file for sure
-				#is this a pointer line ?
-				refpointer,instr = splitToPtrInstr(thisLine)
-				if refpointer != -1:
-						totalptr=totalptr+1
-						filecnt=0  #0 is actually the second file
-						#is this a pointer which meets the criteria ?
-						ptrx = MnPointer(refpointer)
-						if meetsCriteria(ptrx,criteria):
-							while filecnt < len(allfiles)-1 :
-								foundinfile=0
-								foundline = ""
-								for srcLine in targetfiles[filecnt]:
-									refpointer2,instr2 = splitToPtrInstr(srcLine)								
-									if refpointer == refpointer2:
-										foundinfile=1
-										foundline = srcLine									
-										break
-								if checkstrict and foundinfile == 1:
-									# do instructions match ?
-									foundinfile = 0
-									refpointer2,instr2 = splitToPtrInstr(foundline)
-									if (refpointer == refpointer2) and (instr.lower() == instr2.lower()):
-										outtofile += "\n" + str(filecnt+1)+". "+foundline.replace("\n","").replace("\r","")										
-										foundinfile = 1
-								else:
+		if rangeval == 0:
+			for thisLine in refcontent:
+				outtofile = "\n0. "+thisLine.replace("\n","").replace("\r","")
+				if ((tomatch != "" and thisLine.upper().find(tomatch.upper()) > -1) or tomatch == "") and not stopnow:
+					refpointer=""
+					pointerfound=1  #pointer is in source file for sure
+					#is this a pointer line ?
+					refpointer,instr = splitToPtrInstr(thisLine)
+					if refpointer != -1:
+							totalptr=totalptr+1
+							filecnt=0  #0 is actually the second file
+							#is this a pointer which meets the criteria ?
+							ptrx = MnPointer(refpointer)
+							if meetsCriteria(ptrx,criteria):
+								while filecnt < len(allfiles)-1 :
+									foundinfile=0
+									foundline = ""
+									for srcLine in targetfiles[filecnt]:
+										refpointer2,instr2 = splitToPtrInstr(srcLine)
+										if refpointer == refpointer2:
+											foundinfile=1
+											foundline = srcLine	
+											break
+									if checkstrict and foundinfile == 1:
+										# do instructions match ?
+										foundinfile = 0
+										refpointer2,instr2 = splitToPtrInstr(foundline)
+										if (refpointer == refpointer2) and (instr.lower() == instr2.lower()):
+											outtofile += "\n" + str(filecnt+1)+". "+foundline.replace("\n","").replace("\r","")										
+											foundinfile = 1
+									else:
+										if foundinfile == 1:
+											outtofile += "\n" + str(filecnt+1)+". "+foundline.replace("\n","").replace("\r","")
+									if not foundinfile == 1:
+										break	#no need to check other files if any
+									pointerfound=pointerfound+foundinfile
+									filecnt=filecnt+1
+							#search done
+							if pointerfound == len(allfiles):
+								imm.log(" -> Pointer 0x%s found in %d files" % (toHex(refpointer),pointerfound))
+								objcomparefile.write(outtofile,comparefile)
+								comppointers=comppointers+1
+								imm.updateLog()
+								if ptr_to_get > 0 and comppointers >= ptr_to_get:
+									stopnow = True
+							else:
+								objcomparefilenot.write(thisLine.replace('\n','').replace('\r',''),comparefilenot)
+								comppointers_not += 1
+		else:
+			# overlap search
+			for thisLine in refcontent:
+				if not stopnow:
+					refpointer=""
+					pointerfound=1  #pointer is in source file for sure
+					#is this a pointer line ?
+					refpointer,instr = splitToPtrInstr(thisLine)
+					outtofile = "\n0. Range [0x"+toHex(refpointer) + " + 0x" + toHex(rangeval) + " = 0x" + toHex(refpointer + rangeval) + "] : " + thisLine.replace("\n","").replace("\r","")
+					if refpointer != -1:
+							rangestart = refpointer
+							rangeend = refpointer+rangeval
+							totalptr=totalptr+1
+							filecnt=0  #0 is actually the second file
+							#is this a pointer which meets the criteria ?
+							ptrx = MnPointer(refpointer)
+							if meetsCriteria(ptrx,criteria):
+								while filecnt < len(allfiles)-1 :
+									foundinfile=0
+									foundline = ""
+									for srcLine in targetfiles[filecnt]:
+										refpointer2,instr2 = splitToPtrInstr(srcLine)
+										if refpointer2 >= rangestart and refpointer2 <= rangeend:
+											foundinfile=1
+											rangestart = refpointer2
 									if foundinfile == 1:
-										outtofile += "\n" + str(filecnt+1)+". "+foundline.replace("\n","").replace("\r","")	
-								pointerfound=pointerfound+foundinfile
-								filecnt=filecnt+1
-						#search done
-						if pointerfound == len(allfiles):
-							imm.log(" -> Pointer 0x%s found in %d files" % (toHex(refpointer),pointerfound))
-							objcomparefile.write(outtofile,comparefile)
-							comppointers=comppointers+1
-							imm.updateLog()
-							if ptr_to_get > 0 and comppointers >= ptr_to_get:
-								stopnow = True
-						else:
-							objcomparefilenot.write(thisLine.replace('\n','').replace('\r',''),comparefilenot)
-							comppointers_not += 1
+										outtofile += "\n" + str(filecnt+1)+". Pointer 0x" + toHex(rangestart) + " found in range. | " + instr2.replace("\n","").replace("\r","") + "(Refptr 0x" + toHex(refpointer)+" + 0x" + toHex(rangestart - refpointer)+" )"
+									else:
+										break	#no need to check other files if any
+									pointerfound=pointerfound+foundinfile
+									filecnt=filecnt+1
+							#search done
+							if pointerfound == len(allfiles):
+								outtofile += "\nOverlap range : [0x" + toHex(rangestart) + " - 0x" + toHex(rangeend) + "] : 0x" + toHex(rangestart-refpointer)+" bytes from start pointer 0x" + toHex(refpointer) +" \n"
+								imm.log(" -> Pointer(s) in range [0x%s + 0x%s] found in %d files" % (toHex(refpointer),toHex(rangeval),pointerfound))
+								objcomparefile.write(outtofile,comparefile)
+								comppointers=comppointers+1
+								imm.updateLog()
+								if ptr_to_get > 0 and comppointers >= ptr_to_get:
+									stopnow = True
+							else:
+								objcomparefilenot.write(thisLine.replace('\n','').replace('\r',''),comparefilenot)
+								comppointers_not += 1
 		imm.log("Total number of pointers queried : %d" % totalptr)
 		imm.log("Number of matching pointers found : %d - check filecompare.txt for more info" % comppointers)
 		imm.log("Number of non-matching pointers found : %d - check filecompare_not.txt for more info" % comppointers_not)
@@ -6236,6 +6300,8 @@ def goFindMSP(distance = 0,args = {}):
 	criteria = {}
 	criteria["accesslevel"] = "*"
 	
+	tofile = ""
+	
 	global silent
 	oldsilent = silent
 	silent=True	
@@ -6256,6 +6322,7 @@ def goFindMSP(distance = 0,args = {}):
 	pattypes = ["normal","unicode","lower","upper"]
 	if not silent:
 		imm.log("[+] Looking for cyclic pattern in memory")
+	tofile += "[+] Looking for cyclic pattern in memory\n"
 	for pattype in pattypes:
 		imm.updateLog()
 		searchPattern = []
@@ -6284,6 +6351,7 @@ def goFindMSP(distance = 0,args = {}):
 					if thissize > 0:
 						if not silent:
 							imm.log("    Cyclic pattern (%s) found at 0x%s (length %d bytes)" % (pattype,toHex(ptr),thissize))
+						tofile += "    Cyclic pattern (%s) found at 0x%s (length %d bytes)\n" % (pattype,toHex(ptr),thissize)
 						if not ptr in memory:
 							memory[ptr] = ([thissize,pattype])
 					#get distance from ESP
@@ -6292,7 +6360,9 @@ def goFindMSP(distance = 0,args = {}):
 						thisptr = MnPointer(ptr)
 						if thisptr.isOnStack():
 							if ptr > thisesp:
-								imm.log("    -  Stack pivot between %d & %d bytes needed to land in this pattern" % (ptr-thisesp,ptr-thisesp+thissize))
+								if not silent:
+									imm.log("    -  Stack pivot between %d & %d bytes needed to land in this pattern" % (ptr-thisesp,ptr-thisesp+thissize))
+								tofile += "    -  Stack pivot between %d & %d bytes needed to land in this pattern\n" % (ptr-thisesp,ptr-thisesp+thissize)
 			if not "memory" in results:
 				results["memory"] = memory
 			
@@ -6322,6 +6392,7 @@ def goFindMSP(distance = 0,args = {}):
 					offset = offset * factor
 				if not silent:
 					imm.log("    %s overwritten with %s pattern : 0x%s (offset %d)" % (reg,pattype,toHex(regs[reg]),offset))
+				tofile += "    %s overwritten with %s pattern : 0x%s (offset %d)\n" % (reg,pattype,toHex(regs[reg]),offset)
 				if not reg in registers:
 					registers[reg] = ([regs[reg],offset,pattype])
 
@@ -6351,6 +6422,7 @@ def goFindMSP(distance = 0,args = {}):
 					if thissize > 0:
 						if not silent:
 							imm.log("    %s (0x%s) points at offset %d in %s pattern (length %d)" % (reg,toHex(regs[reg]),offset,pattype,thissize))
+						tofile += "    %s (0x%s) points at offset %d in %s pattern (length %d)\n" % (reg,toHex(regs[reg]),offset,pattype,thissize)
 						if not reg in registers_to:
 							registers_to[reg] = ([regs[reg],offset,thissize,pattype])
 						else:
@@ -6365,7 +6437,7 @@ def goFindMSP(distance = 0,args = {}):
 	seh = {}
 	if not silent:
 		imm.log("[+] Examining SEH chain")
-		
+	tofile += "[+] Examining SEH chain\r\n"
 	thissehchain=imm.getSehChain()
 	
 	for chainentry in thissehchain:
@@ -6396,6 +6468,7 @@ def goFindMSP(distance = 0,args = {}):
 					if thissize > 0:
 						if not silent:
 							imm.log("    SEH record (nseh field) at 0x%s overwritten with %s pattern : 0x%s (offset %d), followed by %d bytes of cyclic data" % (toHex(chainentry[0]),pattype,toHex(chainentry[1]),offset,thissize))
+						tofile += "    SEH record (nseh field) at 0x%s overwritten with %s pattern : 0x%s (offset %d), followed by %d bytes of cyclic data\n" % (toHex(chainentry[0]),pattype,toHex(chainentry[1]),offset,thissize)
 						if not chainentry[0]+4 in seh:
 							seh[chainentry[0]+4] = ([chainentry[1],offset,pattype,thissize])
 							
@@ -6414,6 +6487,7 @@ def goFindMSP(distance = 0,args = {}):
 			else:
 				extratxt = "(+- "+str(distance)+" bytes)"
 			imm.log("[+] Examining stack %s - looking for cyclic pattern" % extratxt)
+		tofile += "[+] Examining stack %s - looking for cyclic pattern\n" % extratxt
 		
 		# get stack this address belongs to
 		stacks = getStacks()
@@ -6433,7 +6507,7 @@ def goFindMSP(distance = 0,args = {}):
 	
 		if not silent:
 			imm.log("    Walking stack from 0x%s to 0x%s (0x%s bytes)" % (toHex(stackcounter),toHex(thisstacktop-4),toHex(thisstacktop-4-stackcounter)))
-		
+		tofile += "    Walking stack from 0x%s to 0x%s (0x%s bytes)\n" % (toHex(stackcounter),toHex(thisstacktop-4),toHex(thisstacktop-4-stackcounter))
 
 		# stack contains part of a cyclic pattern ?
 		while stackcounter < thisstacktop-4:
@@ -6496,6 +6570,7 @@ def goFindMSP(distance = 0,args = {}):
 											espoff = curresp - (stackcounter + thissize)
 											espsign = "-"											
 										imm.log("    0x%s : Contains %s cyclic pattern at ESP%s0x%s (%s%s) : offset %d, length %d (-> 0x%s : ESP%s0x%s)" % (toHex(stackcounter),pattype,sign,rmLeading(toHex(offsetvalue),"0"),sign,offsetvalue,offset,thissize,toHex(stackcounter+thissize-1),espsign,rmLeading(toHex(espoff),"0")))
+									tofile += "    0x%s : Contains %s cyclic pattern at ESP%s0x%s (%s%s) : offset %d, length %d (-> 0x%s : ESP%s0x%s)\n" % (toHex(stackcounter),pattype,sign,rmLeading(toHex(offsetvalue),"0"),sign,offsetvalue,offset,thissize,toHex(stackcounter+thissize-1),espsign,rmLeading(toHex(espoff),"0"))
 									if not currptr in stackcontains:
 										stackcontains[currptr] = ([offsetvalue,sign,offset,thissize,pattype])
 								else:
@@ -6512,7 +6587,8 @@ def goFindMSP(distance = 0,args = {}):
 				extratxt = "(entire stack)"
 			else:
 				extratxt = "(+- "+str(distance)+" bytes)"
-			imm.log("[+] Examining stack %s - looking for pointers to cyclic pattern" % extratxt)		
+			imm.log("[+] Examining stack %s - looking for pointers to cyclic pattern" % extratxt)	
+		tofile += "[+] Examining stack %s - looking for pointers to cyclic pattern\n" % extratxt
 		# get stack this address belongs to
 		stacks = getStacks()
 		thisstackbase = 0
@@ -6530,7 +6606,7 @@ def goFindMSP(distance = 0,args = {}):
 		
 		if not silent:
 			imm.log("    Walking stack from 0x%s to 0x%s (0x%s bytes)" % (toHex(stackcounter),toHex(thisstacktop-4),toHex(thisstacktop-4-stackcounter)))
-		
+		tofile += "    Walking stack from 0x%s to 0x%s (0x%s bytes)\n" % (toHex(stackcounter),toHex(thisstacktop-4),toHex(thisstacktop-4-stackcounter))
 		while stackcounter < thisstacktop-4:
 			espoffset = stackcounter - curresp
 			
@@ -6587,6 +6663,7 @@ def goFindMSP(distance = 0,args = {}):
 									offsetvalue = int(str(espoffset).replace("-",""))
 									if not silent:
 										imm.log("    0x%s : Pointer into %s cyclic pattern at ESP%s0x%s (%s%s) : 0x%s : offset %d, length %d" % (toHex(stackcounter),pattype,sign,rmLeading(toHex(offsetvalue),"0"),sign,offsetvalue,toHex(currptr),offset,thissize))
+									tofile += "    0x%s : Pointer into %s cyclic pattern at ESP%s0x%s (%s%s) : 0x%s : offset %d, length %d\n" % (toHex(stackcounter),pattype,sign,rmLeading(toHex(offsetvalue),"0"),sign,offsetvalue,toHex(currptr),offset,thissize)
 									if not currptr in stack:
 										stack[currptr] = ([offsetvalue,sign,offset,thissize,pattype])					
 							
@@ -6598,6 +6675,11 @@ def goFindMSP(distance = 0,args = {}):
 		results["stack"] = stack
 	if not "stackcontains" in results:
 		results["stackcontains"] = stack
+		
+	if tofile != "":
+		objfindmspfile = MnLog("findmsp.txt")
+		findmspfile = objfindmspfile.reset()
+		objfindmspfile.write(tofile,findmspfile)
 	return results
 	
 	
@@ -6841,7 +6923,7 @@ def main(args):
 			imm.log("                          !mona seh -cm aslr")
 			imm.log(" -cp <crit,crit,...>    : Apply some criteria to the pointers to return")
 			imm.log("                          Available options are :")
-			imm.log("                          unicode,ascii,asciiprint,upper,lower,uppernum,lowernum,numeric,alphanum,nonull,startswithnull")
+			imm.log("                          unicode,ascii,asciiprint,upper,lower,uppernum,lowernum,numeric,alphanum,nonull,startswithnull,unicoderev")
 			imm.log("                          Note : Multiple criteria will be evaluated using 'AND', except if you are looking for unicode + one crit")
 			imm.log(" -cpb '\\x00\\x01'        : Provide list with bad chars, applies to pointers")
 			imm.log(" -x <access>            : Specify desired access level of the returning pointers. If not specified,")
@@ -7256,20 +7338,37 @@ def main(args):
 			allfiles=[]
 			tomatch=""
 			checkstrict=True
+			rangeval = 0
 			if "f" in args:
 				if args["f"] <> "":
 					rawfilenames=args["f"].replace('"',"")
 					allfiles = rawfilenames.split(',')
 					imm.log("[+] Number of files to be examined : %d : " % len(allfiles))
-			if "contains" in args:
-				if type(args["contains"]).__name__.lower() == "str":
-					tomatch = args["contains"].replace("'","").replace('"',"")
-			if "nostrict" in args:
-				if type(args["nostrict"]).__name__.lower() == "bool":
-					checkstrict = not args["nostrict"]
-					imm.log("[+] Instructions must match in all files ? %s" % checkstrict)
+			if "range" in args:
+				if not type(args["range"]).__name__.lower() == "bool":
+					strrange = args["range"].lower()
+					if strrange.startswith("0x") and len(strrange) > 2 :
+						rangeval = int(strrange,16)
+					else:
+						try:
+							rangeval = int(args["range"])
+						except:
+							rangeval = 0
+					if rangeval > 0:
+						imm.log("[+] Find overlap using pointer + range, value %d" % rangeval)
+				else:
+					imm.log("Please provide a numeric value ^(> 0) with option -range",highlight=1)
+					return
+			else:
+				if "contains" in args:
+					if type(args["contains"]).__name__.lower() == "str":
+						tomatch = args["contains"].replace("'","").replace('"',"")
+				if "nostrict" in args:
+					if type(args["nostrict"]).__name__.lower() == "bool":
+						checkstrict = not args["nostrict"]
+						imm.log("[+] Instructions must match in all files ? %s" % checkstrict)
 			if len(allfiles) > 1:
-				findFILECOMPARISON(modulecriteria,criteria,allfiles,tomatch,checkstrict)
+				findFILECOMPARISON(modulecriteria,criteria,allfiles,tomatch,checkstrict,rangeval)
 			else:
 				imm.log("Please specify at least 2 filenames to compare",highlight=1)
 
@@ -7432,12 +7531,12 @@ def main(args):
 								try:
 									mindistance = int(valueparts[1])
 								except:
-									mindistance = 0		
+									mindistance = 0	
 							if valueparts[0].lower() == "max":
 								try:
 									maxdistance = int(valueparts[1])
 								except:
-									maxdistance = 0						
+									maxdistance = 0	
 			
 				if maxdistance < mindistance:
 					tmp = maxdistance
@@ -7445,7 +7544,7 @@ def main(args):
 					mindistance = tmp
 				
 				criteria["mindistance"] = mindistance
-				criteria["maxdistance"] = maxdistance				
+				criteria["maxdistance"] = maxdistance
 						
 			allpointers = findPatternWild(modulecriteria,criteria,pattern,base,top)
 				
@@ -9081,7 +9180,7 @@ def main(args):
 										if showdata:
 											data = imm.readMemory(chunkptr+12,16)
 											data = " | " + immutils.prettyhexprint(data).replace('\n','') 
-										imm.log("     Chunk : 0x%s, FLINk at 0x%s (%d)%s" % (toHex(chunkptr-8),toHex(chunkptr),hexval,data),address=chunkptr-8)
+										imm.log("     Chunk : 0x%s, FLINK at 0x%s (%d)%s" % (toHex(chunkptr-8),toHex(chunkptr),hexval,data),address=chunkptr-8)
 										if chunksize != hexval and lalindex > 0:
 											imm.log("   ** self.Size field of chunk at 0x%s may have been overwritten, it contains %d and should have been %d !" % (toHex(chunkptr-8),hexval,chunksize),highlight=1)
 									try:
@@ -9115,7 +9214,7 @@ def main(args):
 									space = len(str(flindex))
 									imm.log("     %s" % ("-" * 80))
 									imm.log("    [%s] - FreeLists[%d] at 0x%s - 0x%s | Expected chunk size : %s" % (flindex,flindex,toHex(freelistblink),toHex(freelistflink),expectedsize))
-									imm.log("         %s[FreeLists[%d].blink : 0x%s | FreeLists[%d].flink : 0x%s]" % (" " * space,flindex,toHex(tblink),flindex,toHex(tflink)))
+									imm.log("         %s[FreeLists[%d].flink : 0x%s | FreeLists[%d].blink : 0x%s]" % (" " * space,flindex,toHex(tflink),flindex,toHex(tblink)))
 									endchain = False
 									while not endchain:
 										thisblink = struct.unpack('<L',imm.readMemory(tflink+4,4))[0]
@@ -9128,7 +9227,7 @@ def main(args):
 										if showdata:
 											data = imm.readMemory(thisblink+16,16)
 											data = " | " + immutils.prettyhexprint(data).replace('\n','') 
-										imm.log("           * Chunk : 0x%s [blink : 0x%s | flink : 0x%s] (%d - 0x%s)%s" % (toHex(tflink),toHex(thisblink),toHex(thisflink),hexval,toHex(hexval),data),address=tflink)										
+										imm.log("           * Chunk : 0x%s [flink : 0x%s | blink : 0x%s] (ChunkSize : %d - 0x%s | UserSize : 0x%s)%s" % (toHex(tflink),toHex(thisflink),toHex(thisblink),hexval,toHex(hexval),toHex(hexval-8),data),address=tflink)										
 										tflink=thisflink
 										if tflink == origblink:
 											endchain = True
@@ -9361,7 +9460,9 @@ Put all filenames between one set of double quotes, and separate files with comm
 Output will be written to filecompare.txt and filecompare_not.txt (not matching pointers)
 Optional parameters : 
     -contains \"INSTRUCTION\"  (will only list if instruction is found)
-    -nostrict (will also list pointer is instructions don't match in all files)"""
+    -nostrict (will also list pointer is instructions don't match in all files)
+    -range <number> : find overlapping ranges for all pointers + range. 
+                      When using -range, the -contains and -nostrict options will be ignored"""
 
 		patcreateUsage="""Create a cyclic pattern of a given size. Output will be written to pattern.txt
 Mandatory argument : size (numberic value)
@@ -9484,8 +9585,6 @@ Mandatory argument :
 	
 		updateUsage = """Update mona to the latest version
 Optional argument : 
-    -t <version> : Force update to a different branch. You can switch your installed version from release to trunk
-and vice versa. Use 'trunk' or 'release' as version keyword to download the latest version of that branch
     -http : Use http instead of https"""
 		getpcUsage = """Find getpc routine for specific register
 Mandatory argument :
