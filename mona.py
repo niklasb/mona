@@ -34,8 +34,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)
  
-$Revision: 156 $
-$Id: mona.py 156 2012-02-23 17:32:05Z corelanc0d3r $ 
+$Revision$
 """
 
 __VERSION__ = '1.3-dev'
@@ -64,8 +63,10 @@ from operator import itemgetter
 
 import traceback
 import inspect
-
-
+import itertools
+import string
+import operator
+from collections import defaultdict, namedtuple
 
 DESC = "Corelan Team exploit development swiss army knife / PyCommand for Immunity Debugger"
 
@@ -149,7 +150,13 @@ def hex2bin(pattern):
 		strb += binascii.a2b_hex(pattern[cnt:cnt+2])
 		cnt=cnt+2
 	return strb
-	
+
+def bin2hex(binbytes):
+	"""
+	Converts a binary string to a string of space-separated hexadecimal bytes.
+	"""
+	return ' '.join('%02x' % ord(c) for c in binbytes)
+
 def bin2hexstr(binbytes):
 	"""
 	Converts bytes to a string with hex
@@ -160,13 +167,7 @@ def bin2hexstr(binbytes):
 	Return :
 	string with hex
 	"""
-	
-	toreturn=""
-	for thisbyte in binbytes:
-		toreturn += "\\x%02x" % ord(thisbyte)
-		
-	return toreturn
-
+	return ''.join('\\x%02x' % ord(c) for c in binbytes)
 
 def str2js(inputstring):
 	"""
@@ -719,8 +720,21 @@ def isHexString(input):
 	Alias for isAddress()
 	"""
 	return isAddress(input)
+
+def extract_chunks(iterable, size):
+	""" Retrieves chunks of the given :size from the :iterable """
+	fill = object()
+	gen = itertools.izip_longest(fillvalue=fill, *([iter(iterable)] * size))
+	return (tuple(x for x in chunk if x != fill) for chunk in gen)
+
+def rrange(x, y = 0):
+	""" Creates a reversed range (from x - 1 down to y).
 	
-	
+	Example:
+	>>> rrange(10, 0) # => [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+	"""
+	return range(x - 1, y - 1, -1)
+
 def getSkeletonHeader(exploittype,portnr,extension,url,badchars='\x00\x0a\x0d'):
 
 	originalauthor = "insert_name_of_person_who_discovered_the_vulnerability"
@@ -4322,117 +4336,260 @@ def compareFileWithMemory(filename,startpos):
 			imm.log("    - Comparing %d locations" % len(locations))
 			imm.log(" Comparing bytes from file with memory :")
 			for location in locations:
-				memcompare(location,srcdata,comparetable,mode)
+				memcompare(location,srcdata,comparetable,mode, smart=(mode=='normal' and len(locations) == 1))
 		silent = False
 	return
-		
-def memcompare(location,srcdata,comparetable,sctype):
+
+class MemoryComparator(object):
+	''' Solve the memory comparison problem with a special dynamic programming
+	algorithm similar to that for the LCS problem '''
+
+	Chunk = namedtuple('Chunk', 'xchunk ychunk')
+
+	move_to_gradient = {
+			0: (0, 0),
+			1: (0, 1),
+			2: (1, 1),
+			3: (2, 1),
+			}
+
+	@classmethod
+	def _build_grid(self, x, y):
+		''' build a 2-d suffix grid for our DP algorithm. '''
+		y = y[:len(x)*2]
+		width, height  = len(x), len(y)
+		values = [[0] * (width + 1) for j in range(height + 1)]
+		moves  = [[0] * (width + 1) for j in range(height + 1)]
+		equal  = [[x[i] == y[j] for i in range(width)] for j in range(height)]
+		equal.append([False] * width)
+
+		for j, i in itertools.product(rrange(height + 1), rrange(width + 1)):
+			value = values[j][i]
+			if i >= 1 and j >= 1:
+				if equal[j-1][i-1]:
+					values[j-1][i-1] = value + 1
+					moves[j-1][i-1] = 2
+				elif value > values[j][i-1]:
+					values[j-1][i-1] = value
+					moves[j-1][i-1] = 2
+			if i >= 1 and not equal[j][i-1] and value - 2 > values[j][i-1]:
+				values[j][i-1] = value - 2
+				moves[j][i-1] = 1
+			if i >= 1 and j >= 2 and not equal[j-2][i-1] and value - 1 > values[j-2][i-1]:
+				values[j-2][i-1] = value - 1
+				moves[j-2][i-1] = 3
+		return (values, moves)
+
+	@classmethod
+	def compare(self, x, y):
+		'''
+		Compares two binary strings under the assumption that y is the result of
+		applying the following transformations onto x:
+
+		 * change single bytes in x (likely)
+		 * expand single bytes in x to two bytes (less likely)
+		 * drop single bytes in x (even less likely)
+
+		Returns a generator that yields elements of the form (unmodified, xdiff, ydiff),
+		where each item represents a binary chunk with "unmodified" denoting whether the
+		chunk is the same in both strings, "xdiff" denoting the size of the chunk
+		in string x and "ydiff" denoting the size of the chunk in y.
+
+		Example:
+		>>> cmp = MemoryComparator()
+		>>> list(cmp.compare("abcdefghijklm", "mmmcdefgHIJZklm"))
+		[(False, 2, 3), (True, 5, 5), (False, 3, 4), (True, 3, 3)]
+		'''
+
+		_, moves = self._build_grid(x, y)
+		# walk the grid
+		path = []
+		i, j = 0, 0
+		while True:
+			dy, dx = self.move_to_gradient[moves[j][i]]
+			if dy == dx == 0: break
+			path.append((dy == 1 and x[i] == y[j], dy, dx))
+			j, i = j + dy, i + dx
+
+		for unmodified, subpath in itertools.groupby(path, operator.itemgetter(0)):
+			ydiffs = [dy for _, dy, _ in subpath]
+			yield (unmodified, len(ydiffs), sum(ydiffs))
+
+	@classmethod
+	def guess_mapping(self, x, y):
+		''' Tries to guess how the bytes in x have been mapped to substrings in y by
+		applying nasty heuristics.
+
+		Example:
+		>>> list(MemoryComparator.guess_mapping("abcdefghijklm", "mmmcdefgHIJZklm"))
+		[('m', 'm'), ('m',), ('c',), ('d',), ('e',), ('f',), ('g',), ('H', 'I'), ('J',),
+		 ('Z',), ('k',), ('l',), ('m',)]
+		>>> list(MemoryComparator.guess_mapping("abcdefgcbadefg", "ABBCdefgCBBAdefg"))
+		[('A',), ('B', 'B'), ('C',), ('d',), ('e',), ('f',), ('g',), ('C',), ('B', 'B'),
+		 ('A',), ('d',), ('e',), ('f',), ('g',)]
+		'''
+		mappings_by_byte = defaultdict(lambda: defaultdict(int))
+		chunks = []
+		for unmodified, dx, dy in self.compare(x, y):
+			xchunk, ychunk, x, y = x[:dx], y[:dy], x[dx:], y[dy:]
+			chunks.append(self.Chunk(xchunk, ychunk))
+			# heuristics to detect expansions
+			if dx < dy and dy - dx <= 3 and dy <= 5:
+				for i, b in enumerate(xchunk):
+					slices = set()
+					for start in range(i, min(2*i + 1, dy)):
+						for size in range(1, min(dy - start + 1, 3)):
+							slc = tuple(ychunk[start:start+size])
+							if slc in slices: continue
+							mappings_by_byte[b][slc] += 1
+							slices.add(slc)
+
+		for b, values in mappings_by_byte.iteritems():
+			mappings_by_byte[b] = sorted(values.items(),
+			                             key=lambda (value, count): (-count, -len(value)))
+
+		for chunk in chunks:
+			xchunk, ychunk = chunk.xchunk, chunk.ychunk
+			dx, dy = len(xchunk), len(ychunk)
+
+			if dx < dy:  # expansion
+				# try to apply heuristics for small chunks
+				if dx <= 10:
+					res = []
+					for b in xchunk:
+						if dx == dy or dy >= 2*dx: break
+						for value, count in mappings_by_byte[b]:
+							if tuple(ychunk[:len(value)]) != value: continue
+							res.append(value)
+							ychunk = ychunk[len(value):]
+							dy -= len(value)
+							break
+						else:
+							yield (ychunk[0],)
+							ychunk = ychunk[1:]
+							dy -= 1
+						dx -= 1
+					for c in res: yield c
+
+				# ... or do it the stupid way. If n bytes were changed to m, simply do
+				# as much drops/expansions as necessary at the beginning and than
+				# yield the rest of the y chunk as single-byte modifications
+				for k in range(dy - dx): yield tuple(ychunk[2*k:2*k+2])
+				ychunk = ychunk[2*(dy - dx):]
+			elif dx > dy:
+				for _ in range(dx - dy): yield ()
+
+			for b in ychunk: yield (b,)
+
+	@classmethod
+	def generate_pattern(self, exclude_bytes='\x00', size=768):
+		''' Creates a binary pattern that has the potential to give very good 
+		memory comparison results '''
+		chrs = [chr(i) for i in range(256) if chr(i) not in exclude_bytes]
+		separators = [c for c in chrs if c in string.ascii_letters]
+		chrs = [c for c in chrs if c not in separators]
+		concat = ''.join
+		# shuffle around: abcdefgh -> ahbgcfde
+		chrs = concat(map(concat, zip(chrs, chrs[::-1])[:(len(chrs)+1)//2]))
+		chunk_size = (len(chrs) // len(separators)) + 1
+		pattern = concat(concat(chunk) + sep for chunk, sep in itertools.izip_longest(extract_chunks(chrs, chunk_size),
+		                                                                              separators, fillvalue=()))
+		return (pattern + pattern[::-1] + pattern)[:size]
+
+
+def memcompare(location, srcdata, comparetable, sctype, smart=True, tablecols=15):
+	# set up logging
 	objlogfile = MnLog("compare.txt")
 	logfile = objlogfile.reset(False)
-	imm.log("[+] Reading memory at location : 0x%s " % toHex(location),address=location,highlight=1)
-	objlogfile.write("-" * 100,logfile)
-	objlogfile.write("* Reading memory at location 0x" + toHex(location),logfile)
-	imm.updateLog()
-	memloc=location
-	#read memory at that location and compare with bytes in array
-	maxcnt=len(srcdata)
-	brokenbytes=[]
-	filelines=[]
-	memlines=[]
-	nrokbytes=0
-	nrbrokenbytes=0
-	cnt=0
-	linecount=0
-	firstcorruption=0
-	while (cnt < maxcnt):
-		#group per 8 bytes for display purposes
-		btcnt=0
-		hexstr=""
-		thislinemem=""
-		thislinefile=""
-		while ((btcnt < 8) and (cnt < maxcnt)):
-			try:
-				if len((hex(ord(srcdata[cnt]))).replace('0x',''))==1:
-					thischar=hex(ord(srcdata[cnt])).replace('0x','0')
-					hexchar=hex(ord(srcdata[cnt])).replace('0x', '\\x0')
-				else:
-					thischar=hex(ord(srcdata[cnt])).replace('0x','')
-					hexchar = hex(ord(srcdata[cnt])).replace('0x', '\\x')
-				hexstr += hexchar
-				memchar = imm.readMemory(memloc+cnt,1)
-				if len((hex(ord(memchar))).replace('0x',''))==1:
-					memchar2 = hex(ord(memchar)).replace('0x','0')
-				else:
-					memchar2 = hex(ord(memchar)).replace('0x','')
-				thislinefile=thislinefile+thischar
-				if (memchar2 == thischar):
-					nrokbytes=nrokbytes+1
-					thislinemem=thislinemem+thischar
-				else:
-					nrbrokenbytes=nrbrokenbytes+1
-					thislinemem=thislinemem+"--"
-					if (firstcorruption==0):
-						firstcorruption=cnt
-					imm.log("     Corruption at position %d : Original byte : %s - Byte in memory : %s" % (cnt,thischar,memchar2))
-					objlogfile.write("   Corruption at position " +str(cnt)+" : Original byte : " + thischar + " - Byte in memory : " + memchar2,logfile)
-				btcnt=btcnt+1
-				cnt=cnt+1
-			except:
-				imm.log("   ******* Error processing byte %s " % cnt)
-				objlogfile.write("   ******* Error processing byte " + str(cnt),logfile)
-				imm.updateLog()
-				cnt=cnt+1
-				btcnt=btcnt+1
-				continue
-		filelines += thislinefile
-		memlines += thislinemem
+	def log_both(msg, **kw):
+		imm.log(msg, **kw)
+		objlogfile.write(msg, logfile)
+	def add_to_table(msg):
+		comparetable.add(0, ['0x%08x' % location, msg, sctype])
 
-	if (nrokbytes == maxcnt):
-		imm.log("     -> Hooray, %s shellcode unmodified" % sctype,focus=1, highlight=1)
-		objlogfile.write("     -> Hooray, " + sctype + " shellcode unmodified",logfile)
-		comparetable.add(0,["0x%s"%(toHex(location)),'Unmodified',sctype])
+	objlogfile.write("-" * 100,logfile)
+	log_both('[+] Reading memory at location : 0x%08x' % location, address=location, highlight=1)
+	imm.updateLog()
+
+	src_bytes, mem_bytes = list(srcdata), list(imm.readMemory(location, 2*len(srcdata)))
+	if smart:
+		mapped_bytes = map(''.join, MemoryComparator.guess_mapping(src_bytes, mem_bytes))
 	else:
-		imm.log("     -> Only %d original bytes of %s code found !" % (nrokbytes,sctype))
-		objlogfile.write("     -> Only " + str(nrokbytes)+" original bytes found",logfile)
-		comparetable.add(0,['0x%s'%(toHex(location)),'Corruption after %d bytes'%(firstcorruption),sctype])
-		lcnt=0
-		lmax = len(filelines)
-		imm.log("      +-----------------------+-----------------------+")
-		objlogfile.write("      +-----------------------+-----------------------+",logfile)
-		imm.log("      | FILE                  | MEMORY                |")
-		objlogfile.write("      | FILE                  | MEMORY                |",logfile)
-		imm.log("      +-----------------------+-----------------------+")
-		objlogfile.write("      +-----------------------+-----------------------+",logfile)
-		while (lcnt < lmax):
-			#read in pairs of 8 bytes
-			bytecnt=0
-			logline1="|"
-			logline2=""
-			while ((lcnt < lmax) and (bytecnt < 16)):
-				pair=0
-				while ((lcnt < lmax) and (pair < 2)):
-					logline1=logline1+filelines[lcnt]
-					logline2=logline2+memlines[lcnt]
-					pair=pair+1
-					lcnt=lcnt+1
-					bytecnt=bytecnt+1
-				logline1=logline1+"|"
-				logline2=logline2+"|"
-			if (bytecnt < 16):
-				while (len(logline1) < 24 ):
-					logline1=logline1+" "
-					logline2=logline2+" "
-					bytecnt=bytecnt+1
-				logline1=logline1+"|"
-				logline2=logline2+"|"
-			imm.log("      %s%s" % (logline1,logline2))
-			objlogfile.write("      "+logline1+logline2,logfile)
-		imm.log("      +-----------------------+-----------------------+")
-		objlogfile.write("      +-----------------------+-----------------------+",logfile)
-		imm.log("")
-		
-		
-		
+		mapped_bytes = mem_bytes[:len(src_bytes)]
+	zipped = zip(src_bytes, mapped_bytes)
+
+	broken = [(i,x,y) for i,(x,y) in enumerate(zipped) if x != y]
+	for i, src, mapped in broken:
+		log_both('    Corruption at position %d: %s -> %s' % (i, bin2hex(src), bin2hex(mapped)))
+
+	if broken:
+		log_both("     -> Only %d original bytes of '%s' code found." % (len(src_bytes) - len(broken), sctype))
+		add_to_table('Corruption after %d bytes' % broken[0][0])
+		hrspace = 3 * tablecols - 1
+		hr = '-'*hrspace
+		log_both(' ,' + hr + '-' + hr + '.')
+		log_both(' |' + ' File'.ljust(hrspace) + '|' + ' Memory'.ljust(hrspace) + '|')
+		log_both(' |' + hr + '+' + hr + '|')
+		for chunk in extract_chunks(zipped, tablecols):
+			chunk = list(chunk) # create a copy
+			line = ' |' + ' '.join(bin2hex(src) for src, _ in chunk)
+			line.ljust(2 + hrspace)
+			line += '|'
+			values = []
+			for src, mapped in chunk:
+				if src == mapped:           # byte matches original
+					values.append('  ')
+				elif len(mapped) == 0:      # byte dropped
+					values.append('--')
+				elif len(mapped) == 2:      # byte expanded
+					values.append('XX')
+				else:                       # byte modified
+					values.append(bin2hex(mapped))
+			line += ' '.join(values)
+			line.ljust(3 + 2*hrspace, ' ')
+			line += '|'
+			# highlight line if a modification was detected
+			log_both(line, highlight = any(x != y for x, y in chunk))
+
+		log_both(' `' + hr + '-' + hr + "'")
+		imm.log('')
+
+		# figure out which transformations were done
+		if smart:
+			transformations = defaultdict(lambda: defaultdict(int))
+			for src, dest in zip(src_bytes, mapped_bytes):
+				transformations[src][dest] += 1
+
+			transformations = { src:sorted(mappings.iteritems(), key=lambda (m, c): -c) 
+			                    for src, mappings in transformations.iteritems() }
+
+			log_both("Conversion analysis:")
+			for src, mappings in transformations.iteritems():
+				for i, (mapped, count) in enumerate(mappings):
+					prefix = "  %s" % bin2hex(src)
+					if i > 0: prefix = ' '*len(prefix)
+					log_both("%s -> %s: %d times" % (prefix, bin2hex(mapped), count))
+
+			reverse_conv_table = { mappings[0][0]:src
+			                       for src, mappings in transformations.iteritems()
+														 if mappings[0][1] > 1 and mappings[0][0] }
+			py_reverse_table = '\n    '.join(', '.join('"%s":"%s"' % (bin2hexstr(dest), bin2hexstr(src))
+                                                 for dest, src in chunk)
+																			 for chunk in extract_chunks(reverse_conv_table.iteritems(), 10))
+
+			# emit Python code to reverse the translation
+			objlogfile.write('''
+Python:
+
+reverse_table = {
+    %(py_reverse_table)s
+}
+''' % locals(), logfile)
+
+	else:
+		log_both('     -> Hooray, %s shellcode unmodified' % sctype, focus=1, highlight=1)
+		add_to_table('Unmodified')
+
 #-----------------------------------------------------------------------#
 # ROP related functions
 #-----------------------------------------------------------------------#
