@@ -4336,7 +4336,7 @@ def compareFileWithMemory(filename,startpos):
 			imm.log("    - Comparing %d locations" % len(locations))
 			imm.log(" Comparing bytes from file with memory :")
 			for location in locations:
-				memcompare(location,srcdata,comparetable,mode, smart=(mode=='normal' and len(locations) == 1))
+				memcompare(location,srcdata,comparetable,mode, smart=(mode == 'normal' and len(locations) == 1))
 		silent = False
 	return
 
@@ -4533,7 +4533,7 @@ def memcompare(location, srcdata, comparetable, sctype, smart=True, tablecols=15
 		for chunk in extract_chunks(zipped, tablecols):
 			chunk = list(chunk) # create a copy
 			line = ' |' + ' '.join(bin2hex(src) for src, _ in chunk)
-			line.ljust(2 + hrspace)
+			line = line.ljust(2 + hrspace)
 			line += '|'
 			values = []
 			for src, mapped in chunk:
@@ -4546,7 +4546,7 @@ def memcompare(location, srcdata, comparetable, sctype, smart=True, tablecols=15
 				else:                       # byte modified
 					values.append(bin2hex(mapped))
 			line += ' '.join(values)
-			line.ljust(3 + 2*hrspace, ' ')
+			line = line.ljust(3 + 2*hrspace)
 			line += '|'
 			# highlight line if a modification was detected
 			log_both(line, highlight = any(x != y for x, y in chunk))
