@@ -4336,7 +4336,7 @@ def compareFileWithMemory(filename,startpos):
 			imm.log("    - Comparing %d locations" % len(locations))
 			imm.log(" Comparing bytes from file with memory :")
 			for location in locations:
-				memcompare(location,srcdata,comparetable,mode, smart=(mode == 'normal' and len(locations) == 1))
+				memcompare(location,srcdata,comparetable,mode, smart=(mode == 'normal'))
 		silent = False
 	return
 
@@ -4410,6 +4410,9 @@ class MemoryComparator(object):
 			if dy == dx == 0: break
 			path.append((dy == 1 and x[i] == y[j], dy, dx))
 			j, i = j + dy, i + dx
+
+		for i, j in zip(range(i, len(x)), itertools.count(j)):
+			path.append((x[i] == y[j], 1, 1))
 
 		for unmodified, subpath in itertools.groupby(path, operator.itemgetter(0)):
 			ydiffs = [dy for _, dy, _ in subpath]
