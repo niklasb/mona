@@ -316,10 +316,6 @@ def toSize(input,size):
 	Return:
 	the expanded string of length <size>
 	"""
-	i = len(input)
-	while i < size:
-		input += " "
-		i+=1
 	return input.ljust(size," ")
 	
 def toUnicode(input):
@@ -2376,40 +2372,50 @@ def showModuleTable(logfile="", modules=[]):
 	filename - output will be written to the filename
 	
 	modules - dictionary with modules to query - result of a populateModuleInfo() call
-	"""	
-	thistable = ""
-	if len(g_modules) == 0:
+	"""
+	if not g_modules:
 		populateModuleInfo()
-	thistable += "----------------------------------------------------------------------------------------------------------------------------------\n"
-	thistable += " Module info :\n"
-	thistable += "----------------------------------------------------------------------------------------------------------------------------------\n"
-	thistable += " Base       | Top        | Size       | Rebase | SafeSEH | ASLR  | NXCompat | OS Dll | Version, Modulename & Path\n"
-	thistable += "----------------------------------------------------------------------------------------------------------------------------------\n"
+	
+	format_hex = lambda x: '0x%08x' % x
 
-	for thismodule,modproperties in g_modules.iteritems():
-		if (len(modules) > 0 and modproperties["name"] in modules or len(logfile)>0):
-			rebase	= toSize(str(modproperties["rebase"]),7)
-			base 	= toSize(str("0x" + toHex(modproperties["base"])),10)
-			top 	= toSize(str("0x" + toHex(modproperties["top"])),10)
-			size 	= toSize(str("0x" + toHex(modproperties["size"])),10)
-			safeseh = toSize(str(modproperties["safeseh"]),7)
-			aslr 	= toSize(str(modproperties["aslr"]),5)
-			nx 		= toSize(str(modproperties["nx"]),7)
-			isos 	= toSize(str(modproperties["os"]),7)
-			version = str(modproperties["version"])
-			path 	= str(modproperties["path"])
-			name	= str(modproperties["name"])
-			thistable += " " + base + " | " + top + " | " + size + " | " + rebase +"| " +safeseh + " | " + aslr + " |  " + nx + " | " + isos + "| " + version + " [" + name + "] (" + path + ")\n"
-	thistable += "----------------------------------------------------------------------------------------------------------------------------------\n"
-	tableinfo = thistable.split('\n')
+	table = []
+	table.append(('Base', 'Top', 'Size', 'Rebase', 'SafeSEH', 'ASLR', 'NXCompat', 'OS Dll', 'Modulename', 'Version', 'Path'))
+	fields = [('rebase',  str), 
+	          ('base',    format_hex), 
+	          ('top',     format_hex), 
+	          ('size',    format_hex), 
+	          ('safeseh', str),
+	          ('aslr',    str),
+	          ('nx',      str),
+	          ('os',      str),
+	          ('name',    str),
+	          ('version', str),
+	          ('path',    str),
+						]
+	for mod in sorted(g_modules.values(), key=lambda mod: (mod['os'], mod['name'].lower())):
+		table.append([func(mod[k]) for k, func in fields])
+
+	# draw the table
+	sizes = tuple(max(len(str(c)) for c in col) for col in zip(*table))
+	separator = '-' * (3 * len(sizes) + sum(sizes[:-1]) + len(table[0][-1]))
+	lines = [
+		separator,
+		"Module info:",
+		separator,
+	]
+	for i, row in enumerate(table):
+		lines.append(' | '.join(str(x).ljust(size) for x, size in zip(row, sizes)))
+		if i == 0 or i == len(table) - 1:
+			lines.append(separator)
+
 	if logfile == "":
-		for tline in tableinfo:
+		for tline in lines:
 			imm.log(tline)
 	else:
 		FILE=open(logfile,"a")
-		FILE.writelines(thistable)
+		FILE.writelines(lines)
 		FILE.close()
-		
+
 #-----------------------------------------------------------------------#
 # This is where the action is
 #-----------------------------------------------------------------------#	
