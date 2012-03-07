@@ -2380,10 +2380,10 @@ def showModuleTable(logfile="", modules=[]):
 
 	table = []
 	table.append(('Base', 'Top', 'Size', 'Rebase', 'SafeSEH', 'ASLR', 'NXCompat', 'OS Dll', 'Modulename', 'Version', 'Path'))
-	fields = [('rebase',  str), 
-	          ('base',    format_hex), 
-	          ('top',     format_hex), 
-	          ('size',    format_hex), 
+	fields = [('base',    format_hex),
+	          ('top',     format_hex),
+	          ('size',    format_hex),
+	          ('rebase',  str),
 	          ('safeseh', str),
 	          ('aslr',    str),
 	          ('nx',      str),
